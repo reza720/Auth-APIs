@@ -12,3 +12,10 @@ const database = new Sequelize (
     }
 );
 module.exports = database;
+
+console.log({
+    database: env.database.dbName,
+    user: env.database.user,
+    password: env.database.password,
+    host: env.database.host
+});

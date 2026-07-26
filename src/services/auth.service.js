@@ -1,23 +1,25 @@
-// Fix  service and controllers for input and return 
-// Seding in heading or body, or user or what else
-
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 
 const { User, RefreshToken} = require("../models");
-const { logger, evn} = require("../config");
+const { logger, env} = require("../config");
 const emailService = require("./email.service");
+const throwError = require("../utils/throwError");
 
 // Register a new user
-async function signup({userName, email, password}){
+async function signup({userName, email, password, confirmPassword}){  
+    if(password !== confirmPassword) throwError("Passwords do not match", 400);
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({
         userName,
         email,
         password: hashedPassword
     });
-    return {
+
+    await requestEmailVerification(email);
+
+    return { 
         id: user.id,
         userName: user.userName,
         email: user.email
@@ -25,8 +27,10 @@ async function signup({userName, email, password}){
 };
 
 // Send email verification request
-async function requestEmailVerification(userId){
-    const user = await User.findByPk(userId);
+async function requestEmailVerification(email){ 
+    const user = await User.findOne({
+        where: {email}
+    });
     if(!user) throwError("User not found", 404);
     if(user.isVerified) throwError ("Email is already verified", 400);
 
@@ -36,11 +40,11 @@ async function requestEmailVerification(userId){
         verificationTokenExpiresAt: new Date(Date.now() + 15*60*1000)
     });
 
-    await emailService.sendAccountVerificationEmail(user.email, token);
+    await emailService.sendAccountVerificationEmail(email, token); 
 };
 
-// Verify email using token
-async function  verifyEmailToken(token) {
+// Verify email 
+async function  verifyEmailToken(token) { 
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
     const user = await User.findOne({
         where: {verificationToken:hashedToken}
@@ -53,12 +57,6 @@ async function  verifyEmailToken(token) {
         verificationToken: null,
         verificationTokenExpiresAt: null
     });
-    return {
-        id: user.id,
-        userName: user.userName,
-        email: user.email,
-        isVerified: user.isVerified
-    };
 }
 
 // Login 
@@ -67,7 +65,7 @@ async function login({email, password}) {
         where: {email}
     });
     
-    if (!user) throwError(`User with ${email} email not found`, 404);
+    if (!user) throwError(`User not found`, 404);
     const isPassValid = await bcrypt.compare(password, user.password);
     if(!isPassValid) throwError("Email or password is not correct", 401);
     if(!user.isVerified) throwError("Verify your email", 401);
@@ -84,12 +82,7 @@ async function login({email, password}) {
         expiresAt: new Date(exp * 1000)
     });
     
-    return {
-        user: {
-            id: user.id,
-            userName: user.userName,
-            email: user.email
-        },
+    return { 
         accessToken,
         refreshToken
     }
@@ -104,8 +97,8 @@ async function refreshAccessToken(refreshToken) {
         },
     });
 
-    if (!storedToken) throwError("Invalid Refreshtoken", 401);
-    if (storedToken.expiresAt < new Date()) throwError("refreshtoken has expired", 401);
+    if (!storedToken) throwError("Invalid Refresh Token", 401);
+    if (storedToken.expiresAt < new Date()) throwError("Refresh Token has expired", 401);
 
     const payload = jwt.verify(
         refreshToken,
@@ -118,11 +111,9 @@ async function refreshAccessToken(refreshToken) {
     return {accessToken};
 }
 
-// Update email, password, and userName
-async function changePassword(email, oldPassword, newPassword) {
-    const user = await User.findOne({
-        where:{email}
-    });
+// Update password
+async function changePassword(userId, oldPassword, newPassword) {
+    const user = await User.findByPk(userId);
     if(!user) throwError("User not found", 404);
 
     const isOldPasswordValid = await bcrypt.compare(oldPassword, user.password);
@@ -135,10 +126,9 @@ async function changePassword(email, oldPassword, newPassword) {
     });
 };
 
-async function changeUserName(oldUserName, newUserName) {
-    const user = await User.findOne({
-        where:{userName:oldUserName}
-    });
+// Update User Name
+async function changeUserName(userId, newUserName) {
+    const user = await User.findByPk(userId);
 
     if(!user) throwError("User not found", 404);
 
@@ -146,18 +136,6 @@ async function changeUserName(oldUserName, newUserName) {
         userName: newUserName
     });
 };
-
-async function changeEmail(oldEmail, newEmail) {
-    const user = await User.findOne({
-        where:{email:oldEmail}
-    });
-
-    if(!user) throwError("User not found", 404);
-
-    await user.update({
-        email:newEmail
-    });
-}
 
 // Logout
 async function logout(refreshToken) {
@@ -174,34 +152,32 @@ async function logout(refreshToken) {
     await storedToken.update({
         revokedAt: new Date()
     });
-    
-    return {
-        message: "User logout"
-    };
-}
-
-// Handle forgot and reset password
-async function sendForgotPasswordEmail(user) {    
-    const {token, hashedToken} = generateToken();
-    await User.update({
-        resetPasswordToken: hashedToken,
-        resetPasswordTokenExpiresAt: new Date(new Date() +  + 15 * 60 * 1000)
-    });
-
-    emailService.sendPasswordResetEmail(email, token);
-    return {
-        message: "password reset email sent"
-    };
 };
 
-async function resetPassword(token, newPassword) {
+// Handle forgot password and reset it
+async function sendPasswordResetToken(email) {  
+    const user = await User.findOne({
+        where:{email}
+    });
+    if (!user) throwError("Email is wrong", 400); 
+    const {token, hashedToken} = generateToken();
+    await user.update({
+        resetPasswordToken: hashedToken,
+        resetPasswordTokenExpiresAt: new Date(Date.now() + 15 * 60 * 1000)
+    });
+
+    await emailService.sendPasswordResetEmail(email, token);
+};
+
+async function resetPassword(token, newPassword, confirmPassword) {
+    if(newPassword !== confirmPassword) throwError("Passwords do not match", 400);
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
     const user = await User.findOne({
         where:{resetPasswordToken: hashedToken}
     });
     
-    if(!user) throwError("Invalid token", 400);
-    if(user.resetPasswordTokenExpiresAt < new Date()) throwError("Token has expired", 400);
+    if(!user) throwError("Invalid token", 401);
+    if(user.resetPasswordTokenExpiresAt < new Date()) throwError("Token has expired", 401);
 
     const newPasswordHashed = await bcrypt.hash(newPassword, 10);
     await user.update({
@@ -209,38 +185,14 @@ async function resetPassword(token, newPassword) {
         resetPasswordToken: null,
         resetPasswordTokenExpiresAt: null
     });
-    
-    return {
-        message: "Password changed"
-    };
+    await RefreshToken.destroy({
+        where: {userId: user.id}
+    });
 };
 
-async function resendForgotPasswordEmail(email) {
-    const user = await User.findOne({
-        where: { email }
-    });
-
-    if (!user)  throwError("User not found", 404);
-
-    const {token, hashedToken} = generateToken();
-
-    await user.update({
-        resetPasswordToken: hashedToken,
-        resetPasswordTokenExpiresAt: new Date(Date.now() + 15 * 60 * 1000)
-    });
-
-    await emailService.sendPasswordResetEmail(user.email,token);
-
-    return {
-        message: "Password reset email sent"
-    };
-}
-
 // Delete user account
-async function deleteUser(email) {
-    const user = await User.findOne({
-        where:{email}
-    });
+async function deleteUser(userId) {
+    const user = await User.findByPk(userId);
 
     if(!user) throwError("User not found", 404);
 
@@ -248,10 +200,6 @@ async function deleteUser(email) {
         where:{userId:user.id}
     });
     await user.destroy();
-
-    return {
-        message: "User Deleted"
-    };
 };
 
 // User Retrieval
@@ -279,13 +227,6 @@ function generateToken(){
         hashedToken
     }
 };
-
-// Creates application errors with HTTP status codes
-function throwError(message, code){
-    const err = new Error(message);
-    err.status = code;
-    throw err;
-}
 
 // Generates JWT access tokens
 function generateAccessToken(user){
@@ -321,13 +262,11 @@ module.exports = {
     verifyEmailToken,
     login,
     refreshAccessToken,
-    changeEmail,
     changePassword,
     changeUserName,
     logout,
-    sendForgotPasswordEmail,
+    sendPasswordResetToken,
     resetPassword,
-    resendForgotPasswordEmail,
     deleteUser,
     getUser
 };

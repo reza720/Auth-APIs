@@ -1,6 +1,4 @@
-const { database } = require("../config/env.config");
 const authService= require("../services/auth.service");
-
 
 // Signup controller
 async function signup(req, res, next) {
@@ -8,7 +6,7 @@ async function signup(req, res, next) {
         const user = await authService.signup(req.body);
         res.status(201).json({
             success: true, 
-            message: "user signed up", 
+            message: "user signed up, please check your email to verify your account.", 
             user
         });
     }
@@ -17,10 +15,10 @@ async function signup(req, res, next) {
     }
 };
 
-// Email verification request
+// Verification email request
 async function requestEmailVerification(req, res, next) {
     try{
-        await authService.requestEmailVerification(req.user.id);
+        await authService.requestEmailVerification(req.body);
         res.status(200).json({
             success:true,
             message: "Verification email sent"
@@ -32,14 +30,13 @@ async function requestEmailVerification(req, res, next) {
 };
 
 // Verify Email
-async function requestEmailVerification(req, res, next) {
+async function verifyEmailToken(req, res, next) {
     try{
         const {token} = req.query;
-        const user = await authService.requestEmailVerification(token);
+        await authService.requestEmailVerification(token);
         res.status(200).json({
             success:true,
-            message: "Email verified",
-            user
+            message: "Email verified"
         });
     }
     catch(err){
@@ -50,11 +47,19 @@ async function requestEmailVerification(req, res, next) {
 // Login
 async function login(req, res, next) {
     try{
-        const user = await authService.login(req.body);
+        const {accessToken, refreshToken} = await authService.login(req.body);
+        
+        res.cookie("refreshToken", refreshToken,{
+            httpOnly: true,
+            secure: false,
+            sameSite: "lax",
+            maxAge: 30 * 24 * 60 * 60 * 1000
+        });
+        
         res.status(200).json({
             success: true, 
             message: "user logged in",
-            user
+            accessToken
         });
     }
     catch(err){
@@ -65,11 +70,12 @@ async function login(req, res, next) {
 // Refresh Access Token
 async function refreshAccessToken(req, res, next) {
     try{
-        const accessToken = await authService.refreshAccessToken(req.body.refreshToken);
+        const refreshToken = req.cookies.refreshToken;
+        const {accessToken} = await authService.refreshAccessToken(refreshToken);
         res.status(200).json({
             success:true,
             message: "Access token generated",
-            ...accessToken
+            accessToken
         });
     }
     catch(err){
@@ -81,7 +87,7 @@ async function refreshAccessToken(req, res, next) {
 async function changePassword(req, res, next) {
     try{
         await authService.changePassword(
-            req.user.email, 
+            req.user.id, 
             req.body.oldPassword, 
             req.body.newPassword);
         res.status(200).json({
@@ -98,7 +104,7 @@ async function changePassword(req, res, next) {
 async function changeUserName(req, res, next) {
     try{
         await authService.changeUserName(
-            req.user.userName,
+            req.user.id,
             req.body.newUserName
         );
         res.status(200).json({
@@ -111,16 +117,13 @@ async function changeUserName(req, res, next) {
     }
 };
 
-// update Email
-async function changeEmail(req, res, next) {
+// Loutout
+async function logout(req, res, next) {
     try{
-        await authService.changeEmail(
-            req.user.email,
-            req.body.newEmail,
-        );
+        await authService.logout(req.cookies.refreshToken);
         res.status(200).json({
             success: true,
-            message: "Email changed"
+            message: "User logged out"
         });
     }
     catch(err){
@@ -128,5 +131,76 @@ async function changeEmail(req, res, next) {
     }
 };
 
+// Send pssword reset token link
+async function sendPasswordResetToken(req, res, next) {
+    try{
+        await authService.sendPasswordResetToken(req.body);
+        res.status(200).json({
+            success: true,
+            message: "Check your email for link to reset your password"
+        });
+    }
+    catch(err){
+        next(err);
+    }
+};
 
+// Reset password
+async function resetPassword(req, res, next) {
+    try{
+        const {token} = req.query;
+        const {newPassword, confirmPassword} = req.body;
+        await authService.resetPassword(token, newPassword, confirmPassword);
+        
+        res.status(200).json({
+            success: true,
+            message: "Password reset"
+        });
+    }
+    catch(err){
+        next(err);
+    }
+};
 
+// User removal
+async function deleteUser(req, res, next) {
+    try{
+        await authService.deleteUser(req.user.id);
+        res.status(200).json({
+            success: true,
+            message: "User deleted"
+        });
+    }
+    catch(err){
+        next(err);
+    }
+};
+
+// Get the User
+async function getUser(req, res, next) {
+    try{
+        const user = await authService.getUser(req.user.id);
+        res.status(200).json({
+            success: true,
+            user
+        });
+    }
+    catch(err){
+        next(err);
+    }
+};
+
+module.exports = {
+    signup,
+    requestEmailVerification,
+    verifyEmailToken,
+    login,
+    refreshAccessToken,
+    changePassword,
+    changeUserName,
+    logout,
+    sendPasswordResetToken,
+    resetPassword,
+    deleteUser,
+    getUser
+};
